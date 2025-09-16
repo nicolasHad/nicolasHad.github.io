@@ -1,0 +1,17 @@
+title: "My Blog"
+description: "Thoughts, tutorials, and notes."
+timezone: Europe/London
+
+# If this is a PROJECT site (not username.github.io), set baseurl like "/my-repo".
+baseurl: ""   # leave empty for username.github.io sites
+url: ""       # e.g., "https://username.github.io"
+
+remote_theme: jekyll/minima
+plugins:
+  - jekyll-feed
+  - jekyll-seo-tag
+
+# Minima theme navigation
+header_pages:
+  - about.md
+  - blog.md
