@@ -33,4 +33,6 @@ The message broker is used to implement a **task queue** which is simply the com
 This is precisely where Celery and Redis enter the story. Celery, is a distributed task queue library for Python and Redis is a popular broker choice.
 Specifically, Celery provides the worker processes and the machinery for defining, dispatching, and executing background jobs. Redis, in this setup, plays the important role of the message broker: an in-memory data store fast enough to act as the inbox where Celery tasks are queued, claimed, and tracked. When the example Youtube server receives the nine-hour upload from above, it doesn't process the video itself, it creates a Celery task, Redis adds it into the queue, and immediately returns a response to the uploader. A Celery worker running in its own process (and optionally on its own machine) and sees the new task in Redis, picks it up, and begins the long work of saving and encoding the file. Meanwhile, the web server is free, the music video keeps playing, and our first user never knows any of this happened.
 
+![alt text](/_posts/images/celery_task_queue_flow.drawio.svg)
+
 ---
