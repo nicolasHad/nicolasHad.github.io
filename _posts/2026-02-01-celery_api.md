@@ -19,6 +19,18 @@ In modern applications, one can take this challenge one step further and ask the
 
 Therefore, the task is now updated to not only ensuring the non-blocking behaviour of our app, but also how do we accommodate a large number of such non-blocking processes in a manageable way. 
 
-Modern programming languages and frameworks offer several tools and libraries for developing non-blocking applications with asynchronous process execution. 
+Typically, an application based on a non-blocking architecture operates in the following manner:
+- A user will initiate a long running process via the UI.
+- The server does 2 things:
+   - Registers the process to a broker who will in turn hand the job of executing this process to one of many available workers.
+   - Lets the user know that their request was received and handed over to a worker for execution (instant acknowledgment).
+- The user proceeds to do something else, while being able to go back and check on the progress of the process they submitted earlier.
+
+But what exactly is a broker and a worker?
+A **worker** is a separate process whose entire job is to execute long-running tasks. A **message broker** is a system that is able to take in the requests coming from the server and distribute them to different workers for execution.
+The message broker is used to implement a **task queue** which is simply the component which is in charge of temporarily registering processes to be executed until workers can pick them up for execution.
+
+This is precisely where Celery and Redis enter the story. Celery, is a distributed task queue library for Python and Redis is a popular broker choice.
+Specifically, Celery provides the worker processes and the machinery for defining, dispatching, and executing background jobs. Redis, in this setup, plays the important role of the message broker: an in-memory data store fast enough to act as the inbox where Celery tasks are queued, claimed, and tracked. When the example Youtube server receives the nine-hour upload from above, it doesn't process the video itself, it creates a Celery task, Redis adds it into the queue, and immediately returns a response to the uploader. A Celery worker running in its own process (and optionally on its own machine) and sees the new task in Redis, picks it up, and begins the long work of saving and encoding the file. Meanwhile, the web server is free, the music video keeps playing, and our first user never knows any of this happened.
 
 ---
