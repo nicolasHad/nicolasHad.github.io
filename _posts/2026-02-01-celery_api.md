@@ -113,6 +113,75 @@ Now that we've outlined the architecture, let's see what it actually looks like 
 
    In order for jobs to be picked up and be processed, we need active workers that will watch the queue and pick up these jobs.
 
+   Setting up running workers is a separate task, through the command line
+   ```bash
+   celery -A tasks worker --loglevel=info
+   ```
 
+   The key point for this is that this command doesn't have to run on the same machine as the web server. As long a worker can reach the same Redis instance that the server registers queued tasks to, it can pick up tasks. From here on, scaling up to handle more concurrent task executions is siimply a matter of starting more workers, anywhere.
+   
+
+5. **Polling for updates**
+
+   Recall that Celery instantly provides a task_id to the client side to signify that the task has been received and added to the queue for execution. This task comes in handy for checking on the task's status in subsequent times. When asking Celery for updates on a submitted job, we can know if the task is pending, running,completed or failed (these are the possible return values most of the time).
+   
+   Imagine that buffering icon on many UIs that shows up when something is yet to finish. That buffering icon shows up while the answer of the server when polling for the status of a job is either pending or running. As soon as a polling request returns a completed status, we can retrieve the result and stop showing the buffering icon to the user. 
+
+   Implementation-wise, we expose a small status endpoint that looks up the task's state:
+
+   ```python
+   # views.py (continued)
+   from celery.result import AsyncResult
+   from tasks import celery_app
+
+   @app.get("/tasks/<task_id>")
+   def task_status(task_id: str):
+      result = AsyncResult(task_id, app=celery_app)
+      response = {"task_id": task_id, "state": result.state}
+      if result.ready():
+         response["result"] = result.result if result.successful() else str(result.result)
+      return jsonify(response)
+
+   ```
+
+   AsyncResult consults the result backend (the /1 Redis database we configured earlier) and reports the task's current state — PENDING, STARTED, SUCCESS, FAILURE, or RETRY. The browser can poll this endpoint every few seconds and update the UI accordingly: a buffering spinner as we mentioned above while the task is in progress, a success banner once result.ready() returns true.
+
+   This is exactly the polling loop drawn in the bottom row of the diagram above, made concrete.
 
 ---
+
+## Routing tasks to the right workers
+
+The setup we've built so far has a hidden assumption: every worker is equally capable of running every task. In practice, that assumption falls apart fast. Consider our two example tasks side by side: encoding a nine-hour speedrun is CPU-bound and memory-hungry — it might take an hour on a beefy machine and bring a smaller one to its knees. Regenerating a video's thumbnail, by contrast, takes a couple of seconds and barely registers on the CPU. If both tasks go into the same queue and are picked up by the same pool of workers, two bad things happen.
+
+First, the cheap tasks get stuck behind the expensive ones. A user who just edited their video title and triggered a thumbnail refresh waits behind a speedrun encode that landed in the queue thirty seconds earlier. Second, you're forced into an awkward sizing decision: either you provision every worker to handle the worst-case task — paying for high-memory machines that spend most of their time regenerating thumbnails — or you provision for the average and watch the expensive tasks crash workers that can't handle them.
+
+The fix is to give tasks and workers matching labels, so that expensive tasks only land on workers equipped to run them. In Celery, those labels are called queues. We declare which queue a task belongs to, and we start each worker with the list of queues it's allowed to consume from.
+
+In our python code, tasks can be set up as follows:
+
+```python
+# tasks.py
+from celery import Celery
+
+celery_app = Celery(
+    "youtube_clone",
+    broker="redis://localhost:6379/0",
+    backend="redis://localhost:6379/1",
+)
+
+celery_app.conf.task_routes = {
+    "tasks.process_video_upload":  {"queue": "encoding"},
+    "tasks.regenerate_thumbnail":  {"queue": "thumbnails"},
+}
+
+@celery_app.task
+def process_video_upload(video_id: str, file_path: str) -> dict:
+    ...  # CPU-heavy: transcode, multiple resolutions, write to storage
+
+@celery_app.task
+def regenerate_thumbnail(video_id: str) -> dict:
+    ...  # cheap: pull one frame, resize, upload
+
+```
+
