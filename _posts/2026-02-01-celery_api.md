@@ -173,8 +173,8 @@ celery_app = Celery(
 )
 
 celery_app.conf.task_routes = {
-    "tasks.process_video_upload":  {"queue": "encoding"},
-    "tasks.regenerate_thumbnail":  {"queue": "thumbnails"},
+    "tasks.process_video_upload":  {"queue": "heavy"},
+    "tasks.regenerate_thumbnail":  {"queue": "light"},
 }
 
 @celery_app.task
@@ -187,3 +187,46 @@ def regenerate_thumbnail(video_id: str) -> dict:
 
 ```
 
+And our workers setup will be:
+
+```bash
+# On a high-CPU, high-memory machine — handles encodings only
+celery -A tasks heavy_worker --loglevel=info -Q heavy --concurrency=2
+
+# On smaller, cheaper machines — handles thumbnails only
+celery -A tasks light_worker --loglevel=info -Q light --concurrency=8
+```
+
+In the above example, we implement and register two Celery tasks called process_video_upload and regenerate_thumbnail. The first one is a hypothetically computationally expensive method that would normally need to be executed within a server/machine that has increased computatinal resources (availability og multi-core CPUs and GPUs). Using the ```python
+celery_app.conf.task_routes``` utility, we let the Celery app know that whenever a process_video_upload job is requested, we will only let the heavy_worker to pick it up and execute it. In a similar manner, we assign any regenerate_thumbnail to the ligh queue, making it available only to light_worker.
+
+There's one more useful trick worth knowing. A worker can subscribe to multiple queues, which lets you create overflow capacity:
+
+```bash
+celery -A tasks flexible_worker -Q heavy,light --concurrency=2
+```
+
+This worker prefers heavy tasks (listed first) but will pick up light tasks if the heavy queue is empty. This comes in handy for fallback behavior, but we must use it carefully. The moment that worker grabs a longer light task, it's no longer available to process a heavy task it was meant to serve. Typically, we'd want strict separation rather than flexible overflow.
+
+
+## Easy, built-in way to monitor Celery apps
+
+The setup we've built now has tasks flowing through multiple queues, workers of different shapes consuming them, and results landing in Redis. But in terms of monitoring internal state of our Celery app, we can't really see much. 
+If a user complains that their task has been "processing" for an hour, where do we look? Is the task still in the queue? Did a worker pick it up and crash? Is it actually running and just slow?
+
+The answer to the above questions is Flower, a web-based monitoring dashboard for Celery. It connects to the same broker our workers use, listens to the events Celery emits as tasks move through their lifecycle, and gives us a live view of every worker, every queue, and every task in the system. Installing and starting it takes two commands:
+
+```bash
+pip install flower
+celery -A tasks flower --port=5555
+```
+
+We simply open http://[HOST_ADDRESS]:5555 and get a dashboard showing each connected worker, the queues it's consuming from, its current concurrency and load, and a live-updating list of tasks with their state (received, started, succeeded, failed, retried). You can click into any individual task to see its arguments, its runtime, its return value or traceback, and which worker handled it. 
+
+<p align="center">
+  <img src="/assets/images/flower_1.webp" alt="Flower workers monitoring.">
+</p>
+
+<p align="center">
+  <img src="/assets/images/flower_2.png" alt="Flower tasks monitoring.">
+</p>
