@@ -262,3 +262,39 @@ Celery gives solutions to all of the above, almost entirely out of the box: a br
 <p align="center">
   <img src="/assets/images/motaas.drawio.png" alt="Flower workers monitoring.">
 </p>
+
+
+### Multi-Step Pipelines via Celery Chains
+
+Chaining tasks is also permitted in Celery. For example, in our MotaaS platform, certain processes require the completion of several subtasks to be completed in specific sequences. One of these is our search feature, which receives a motion capture animation as input and returns motions which are similar to the query(we also call this search by example).
+
+For search, we need the user's motion query to first pass through some pre-processing steps in order to be compatible for input to our motion encoding model. Specifically, the search workflow is a two-stage pipeline: retarget the user's BVH to the universal skeleton, then encode-and-search. We compose it with celery.chain:
+
+```python
+def search(input_path, args):
+   workflow = chain(
+         retarget_task.s(input_path),
+         search_task.s(args),
+   )
+   return workflow.apply_async()
+```
+
+The output of the first task in the sequence (the retarget_task) is automatically fed into the seconds task (search_task) as its first argument. In this case, task_ids are assigned to all involved subtasks as well as the whole parent task. The client simply polls the parent task in the same way it would poll any other non-chained task. Celery conveniently handles the hand-off, the failure propagation, and the result chaining for us.
+
+### Cancellation of tasks
+In our platform (and also a requirement in most dynamic apps/services), we need the user to be able to cancel a task, for any reason.
+Task cancellation is not as straightforward as most of the above, since the running process of a  task that was already picked up by a worker might not be accessible at any time.
+Despite that, Celery does provide some utility in terms of task cancellation by registering a task as an abortable task.
+
+```python
+@celery_app.task(bind=True, base=AbortableTask, soft_time_limit=300, time_limit=600)
+def process_bvh_task_abortable(self, input_path):
+   for i in range(100):
+      if not i % 5 and self.is_aborted():
+         return {'status': 'aborted', ...}
+      process_bvh(str(input_path), str(out_dir))
+```
+
+From client-side, a cancel button is pclick, the FastAPI /cancel/{task_id} endpoint then tries a graceful abort() first. If the task is not abortable, or abort fails for some other reason, we fall back to using revoke(terminate=True). Combined with task_track_started=True, we get clean, four-state lifecycle visibility (PENDING / STARTED / SUCCESS / REVOKED) over Redis.
+
+An abortable task method will simply only keep a task running if the .is_aborted() method is not true (loop logic above). As soon as the user requests cancellation of a task via the UI, .is_aborted() will be True, and the task will be revoked from the task queue.
