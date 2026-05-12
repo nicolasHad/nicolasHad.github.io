@@ -230,3 +230,35 @@ We simply open http://[HOST_ADDRESS]:5555 and get a dashboard showing each conne
 <p align="center">
   <img src="/assets/images/flower_2.png" alt="Flower tasks monitoring.">
 </p>
+
+
+## Case Study: 3DMotaaS — A Horizontally Scalable Motion Search/Edit/Retargeting Platform
+
+Now let's look at a real life application of Celery to one of the projects I've worked on recently called 3DMotaaS (3D-Motion-as-a-Service), a platform where users can upload, manage, edit motion capture data as well as well as retrieve similar motion sequences given example motion queries.
+
+The 3DMotaaS platform primarily works with .bvh skeletal animation files. One of the main process features of this service is the automatic (and on demand) unification of all motion data by retargeting all motion input in the platform to one fixed universal skeleton format.
+
+All you need to know to grasp the relevance of Celery to this: Many of the processes offered by this platform can be very computationally intensive (because they require on-demand inference of Deep Learning models with motion capture sequence inputs, which can get really large).
+
+In general, the platform offers features of varying computational costs. 
+These can be retargeting motions onto a universal skeleton, encoding them with a Transformer VAE, searching a FAISS index of pre-encoded motion segments, and returning near-neighbor matches that can be downloaded back in .bvh, .fbx, or .glb form. Behind the API, each one of those steps is a long-running, CPU/GPU-bound, Blender- or PyTorch-heavy job — anything from a few seconds (FAISS lookup) to many minutes (model fine-tuning on a user's dataset).
+
+It is therefore warranted that we implemented the backend of the service with the capabilities of distributing processes across workers of variable processing capabilities, to ensure a smooth running, optimised and non blokcing service to the users.
+
+We use Celery + Redis in front of a FastAPI front door to turn that pipeline into something that scales horizontally and never blocks a request thread.
+
+
+
+### Why Celery?
+
+  The platform's following properties make an async task queue like Celery the obvious fit:
+
+1. Heterogeneous workloads. As we briefly mentioned earlier, a /retarget job calls into a different conda environment (Blender + a universal-skeleton retargeting pipeline) via subprocess. A /search job loads a PyTorch model and a FAISS index. A /train job runs a fine-tuning loop. We can't realistically run these inside one single request handler and expect optimal performance.
+2. Job durations vary. Indexing a single segment (2-3 seconds of motion capture) takes milliseconds, fine-tuning a model takes tens of minutes. Non blocking behaviour is essential.
+3. Independent jobs, shared infrastructure. Multiple users uploading motion clips at the same time should be distributed across any number of GPUs/CPUs we've set up, without manually coordinating this in the application code.
+
+Celery gives solutions to all of the above, almost entirely out of the box: a broker (a Redis instance), a result backend (another Redis instance), and a pool of workers we can scale by simply running more celery worker processes on the same machine or across machines pointed at the same Redis.
+
+<p align="center">
+  <img src="/assets/images/motaas.drawio.png" alt="Flower workers monitoring.">
+</p>
